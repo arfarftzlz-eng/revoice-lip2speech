@@ -13,7 +13,7 @@ naturalized speech preview without learning the underlying model stack.
 
 ## Product Purpose
 
-USR 2.0 Visual Speech Studio turns silent lip movement into English text and
+ReVoice-Lip turns silent lip movement into English text and
 then reconstructs plausible speech while preserving detected pauses. Success
 means the input-to-result workflow is obvious, model state is trustworthy, and
 technical detail remains available without competing with the primary task.

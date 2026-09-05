@@ -1101,7 +1101,7 @@ def build_app(service: VSRService) -> gr.Blocks:
     }
     """
     with gr.Blocks(
-        title="USR 2.0 Visual Speech Recognition",
+        title="ReVoice-Lip｜唇声再生",
         delete_cache=(3600, 3600),
         theme=theme,
         css=css,
@@ -1113,7 +1113,7 @@ def build_app(service: VSRService) -> gr.Blocks:
                     <div class="vsr-brand">
                       <div class="vsr-mark" aria-hidden="true">USR</div>
                       <div class="vsr-identity">
-                        <h1>Visual Speech Studio</h1>
+                        <h1>ReVoice-Lip <span style="font-weight: 500;">｜唇声再生</span></h1>
                         <p>Visual lip reading with pause-aware speech reconstruction.</p>
                       </div>
                     </div>

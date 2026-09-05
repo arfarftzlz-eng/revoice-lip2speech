@@ -1,11 +1,11 @@
-# Visual Speech Studio
+# ReVoice-Lip｜唇声再生
 
 面向全喉切除术后无喉者交流场景的**视觉唇语识别与自然语音重建研究原型**。系统只读取短视频中的口唇运动，先生成受视觉证据支持的候选句，再恢复停顿、呼吸或尾音节奏，最后通过 TTS（文本转语音）输出可播放语音。
 
 > 当前为研究与演示原型，不是医疗器械，也尚未经过真实无喉者临床验证。仓库公开的是代码与开发集统计，不包含个人测试视频、API 密钥或 7.6 GB 模型权重。
 
 <p align="center">
-  <img src="assets/visual-speech-studio-v4.png" width="900" alt="Visual Speech Studio V4 browser interface showing session-only TTS and language API inputs">
+  <img src="assets/revoice-lip-v4.png" width="900" alt="ReVoice-Lip V4 browser interface showing session-only TTS and language API inputs">
 </p>
 
 ## Research question
@@ -38,12 +38,10 @@ Top-5 理论最优 WER 为 12.30%，说明视觉模型经常已经生成正确�
 ## Main contributions
 
 - 将 USR 2.0 论文模型改造成可上传视频或调用摄像头的 Gradio 应用。
-- 为 8 GB 显存设备加入安全 Beam 上限、显存释放和 CUDA 失败提示。
 - 使用实时 Top-5 候选与千问重排，在提高句子合理性的同时禁止模型脱离视觉证据自由生成。
 - 结合 CTC 空白概率与嘴部运动建立停顿时间线；超过 0.3 秒的停顿只使用无声呼吸或尾音，避免突兀的“uh/um”。
 - 接入 MiniMax Speech-2.8 HD、ElevenLabs 和 Edge TTS，并支持官方端点与兼容代理地址。
 - 建立 WER、CER、整句准确率、跨遍稳定性、Top-5 上限、语义准确率和停顿误差等评测脚本。
-- 提供 37 项自动测试，覆盖视觉候选边界、API 失败回退、密钥不落盘和停顿渲染规则。
 
 ## Quick start
 

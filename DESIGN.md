@@ -1,5 +1,5 @@
 ---
-name: USR 2.0 Visual Speech Studio
+name: ReVoice-Lip｜唇声再生
 description: A precise visual-speech recognition and prosody reconstruction workspace.
 colors:
   primary: "oklch(0.55 0.16 68)"
@@ -74,7 +74,7 @@ components:
     padding: "24px"
 ---
 
-# Design System: USR 2.0 Visual Speech Studio
+# Design System: ReVoice-Lip｜唇声再生
 
 ## Overview
 
