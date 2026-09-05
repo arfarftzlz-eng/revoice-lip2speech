@@ -7,3 +7,6 @@ numpy
 tqdm
 av
 mediapipe
+edge-tts>=7.2
+pydub>=0.25
+imageio-ffmpeg>=0.6

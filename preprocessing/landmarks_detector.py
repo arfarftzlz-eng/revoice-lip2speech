@@ -55,8 +55,11 @@ class _MediaPipeDetector:
                 "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
             )
 
+        with open(model_path, "rb") as model_file:
+            model_asset_buffer = model_file.read()
+
         options = FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=model_path),
+            base_options=BaseOptions(model_asset_buffer=model_asset_buffer),
             num_faces=1,
             min_face_detection_confidence=0.5,
         )

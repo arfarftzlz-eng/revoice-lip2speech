@@ -3,9 +3,15 @@ import os
 import torch
 
 
+UNIGRAM1000_PATH = os.path.join(
+    os.path.dirname(__file__), "labels", "unigram1000_units.txt"
+)
 UNIGRAM1000_LIST = (
     ['<blank>']
-    + [_.split()[0] for _ in open(os.path.join(os.path.dirname(__file__), "labels", "unigram1000_units.txt")).read().splitlines()]
+    + [
+        _.split()[0]
+        for _ in open(UNIGRAM1000_PATH, encoding="utf-8").read().splitlines()
+    ]
     + ['<eos>']
 )
 

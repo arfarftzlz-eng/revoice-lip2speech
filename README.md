@@ -1,4 +1,71 @@
-# USR 2.0
+# Visual Speech Studio
+
+面向全喉切除术后无喉者交流场景的**视觉唇语识别与自然语音重建研究原型**。系统只读取短视频中的口唇运动，先生成受视觉证据支持的候选句，再恢复停顿、呼吸或尾音节奏，最后通过 TTS（文本转语音）输出可播放语音。
+
+> 当前为研究与演示原型，不是医疗器械，也尚未经过真实无喉者临床验证。仓库公开的是代码与开发集统计，不包含个人测试视频、API 密钥或 7.6 GB 模型权重。
+
+<p align="center">
+  <img src="assets/visual-speech-studio-v4.png" width="900" alt="Visual Speech Studio V4 browser interface showing session-only TTS and language API inputs">
+</p>
+
+## Research question
+
+普通唇语识别只回答“说了什么”。本项目进一步研究：在没有原始声音的情况下，能否同时保留**意思、停顿节奏、自然呼吸感和可识别的个人音色**，帮助无喉者获得更接近自然交流的输出。
+
+```text
+无声人脸视频
+  → 嘴部区域提取
+  → USR 2.0 视觉模型生成实时 Top-5 候选
+  → 千问在视觉候选范围内重排（不能自由改写）
+  → CTC 与嘴部运动共同定位停顿
+  → MiniMax / ElevenLabs / Edge TTS 生成语音
+```
+
+### V4 development results
+
+以下结果来自 30 个英文句子、每句独立录制两遍，共 60 段自建视频。它们已经参与参数选择，因此属于**开发集结果**，不能替代冻结参数后的独立测试集。
+
+| 指标 | 视觉 Top-1 | 准确率优先语言重排 |
+|:--|--:|--:|
+| WER（词错误率，越低越好） | 18.85% | **15.57%** |
+| 整句完全正确率 | 43.33% | **55.00%** |
+| 核心意思可接受率 | 65.00% | **80.00%** |
+
+Top-5 理论最优 WER 为 12.30%，说明视觉模型经常已经生成正确候选，只是原始排序不一定合理。准确率优先重排带来 17.39% 的相对 WER 降低，但仍有 6 段严格 WER 退化，所以系统保留视觉约束、失败回退和诊断信息。
+
+停顿实验目前仍是薄弱环节：指定长停顿检出率为 50.00%，呼吸/尾音分类准确率为 22.22%。因此语气还原在本项目中是下一阶段研究目标，而不是已经完成的结论。
+
+## Main contributions
+
+- 将 USR 2.0 论文模型改造成可上传视频或调用摄像头的 Gradio 应用。
+- 为 8 GB 显存设备加入安全 Beam 上限、显存释放和 CUDA 失败提示。
+- 使用实时 Top-5 候选与千问重排，在提高句子合理性的同时禁止模型脱离视觉证据自由生成。
+- 结合 CTC 空白概率与嘴部运动建立停顿时间线；超过 0.3 秒的停顿只使用无声呼吸或尾音，避免突兀的“uh/um”。
+- 接入 MiniMax Speech-2.8 HD、ElevenLabs 和 Edge TTS，并支持官方端点与兼容代理地址。
+- 建立 WER、CER、整句准确率、跨遍稳定性、Top-5 上限、语义准确率和停顿误差等评测脚本。
+- 提供 37 项自动测试，覆盖视觉候选边界、API 失败回退、密钥不落盘和停顿渲染规则。
+
+## Quick start
+
+1. 按下方原论文说明安装依赖并下载 USR 2.0 Huge 权重，将权重放入 `checkpoint/`。
+2. 安装 FFmpeg，并根据显卡环境安装 PyTorch。
+3. 启动界面：
+
+```bash
+python gradio_app.py
+```
+
+4. 浏览器打开终端显示的本地地址。MiniMax 与千问密钥都可以只在页面会话中输入；不填密钥时，识别仍可运行，TTS 会回退到 Edge。
+
+### Privacy and API boundary
+
+- 输入视频与嘴部裁剪在本机处理。
+- 可选语言重排只向文本 API 发送五个候选句，不发送视频。
+- 可选云端 TTS 只接收最终文本和节奏标记。
+- 页面密钥不写入文件、不写入日志，也不复制到进程环境变量。
+- `.env`、测试视频、音频、模型权重、缓存和本地备份均由 `.gitignore` 排除。
+
+## Research foundation: USR 2.0
 
 **Pay Attention to CTC: Fast and Robust Pseudo-Labelling for Unified Speech Recognition**
 
@@ -130,6 +197,112 @@ python demo.py video=video.mp4 model.pretrained_model_path=model.pth \
 ```
 
 Any [Hydra](https://hydra.cc/) override works. For example, to change beam size: `decode.beam_size=10`.
+
+---
+
+## Prosody-aware Gradio demo
+
+The Gradio application keeps the decoded CTC token sequence, aligns it back to
+the 25 FPS video, and combines inter-word CTC gaps with low mouth motion.  The
+result is a conservative pause timeline used by speech synthesis.  It never
+inserts lexical fillers such as `uh` or `um` because unsupported words would no
+longer match the visible lip movements.
+
+```bash
+python gradio_app.py
+```
+
+### Accuracy-first Top-5 language reranking
+
+The optional language reranker builds up to five unique beam hypotheses for
+every current video and asks an OpenAI-compatible text API to score those
+unchanged sentences. In the default accuracy-first mode, Qwen's selected
+candidate is used directly. It cannot generate replacement text outside the
+live Top-5. Timeout, malformed JSON, a missing key, or any API error
+automatically keeps the original visual Top-1.
+
+The default configuration targets Qwen Flash:
+
+```text
+API Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+Model: qwen3.7-flash
+```
+
+Open **Language reranking** in the page, enter a session-only API key, test the
+connection, then enable reranking. The key is sent only in the Authorization
+header and is never saved or logged. The diagnostics panel records the chosen
+candidate, visual score drop, language score, and fallback reason.
+
+The reranker needs Beam 2 or higher. On an 8 GB GPU the application retains its
+existing safe Beam 5 limit. TTS remains independent and reads whichever
+visually supported candidate the recognizer selects.
+
+The 60-clip fixed N-best cache in `测试集` is an offline evaluation artifact
+only. Online recognition never looks up that cache: each new video produces a
+fresh live Top-5 before Qwen selects one candidate.
+
+The speech panel has four modes:
+
+- **Natural (automatic):** prefer MiniMax Speech-2.8 HD when
+  `MINIMAX_API_KEY` is configured, then ElevenLabs v3, and finally Edge TTS.
+- **Expressive AI (MiniMax Speech-2.8 HD):** use the domestic provider's exact
+  `<#seconds#>` pause controls and `(breath)`/`(inhale)` audio events.
+- **Expressive AI (ElevenLabs v3):** require the expressive provider and use
+  pause/breath audio tags.
+- **Standard (Edge TTS):** always use the no-key-compatible provider.
+
+MiniMax is the recommended provider for this project because its API can
+express both measured pause duration and audible non-lexical breathing. Enable
+it by pasting a newly generated key into the password field at the top of the
+Gradio page, selecting the account region, and clicking **Verify key**. Auto
+detect checks the official global endpoint first, then the Mainland China
+endpoint, using MiniMax's non-billable voice-list API. The value is passed only
+to the validation or synthesis request and is not written to a file or copied
+into the process environment. The result panel always states whether MiniMax or
+the Edge fallback actually generated the audio.
+
+If the key comes from a relay or self-managed MiniMax-compatible service, enter
+its **API Base URL** in the same connection panel. Both `https://host` and
+`https://host/v1` forms are accepted; the application avoids duplicating the
+`/v1` segment. The relay must expose the native MiniMax-compatible
+`/v1/get_voice` and `/v1/t2a_v2` routes. Leave the field blank to use the
+official Global/Mainland China region selector. The URL, like the session key,
+is not saved.
+
+RelayRouter is supported as a special MiniMax-native gateway. When the UI receives
+`https://api.relayrouter.ai/v1`, it validates the key with `GET /v1/models` and
+routes synthesis to `POST /minimax/v1/t2a_v2`. The model group attached to the
+key must include `speech-2.8-hd`.
+
+For a dedicated local machine, the existing environment-variable option is
+also supported:
+
+```powershell
+$env:MINIMAX_API_KEY = "your-api-key"
+# Optional: override auto-detection with an official or self-managed endpoint.
+# Global: https://api.minimax.io
+# Mainland China: https://api.minimax.cn
+$env:MINIMAX_API_BASE = "https://api.minimax.cn"
+# Optional: choose another MiniMax system or cloned voice.
+$env:MINIMAX_VOICE_ID = "English_Trustworthy_Man"
+# Optional: calm, fluent, happy, sad, angry, fearful, disgusted, or surprised.
+$env:MINIMAX_EMOTION = "calm"
+python gradio_app.py
+```
+
+ElevenLabs remains available as a compatible alternative:
+
+```powershell
+$env:ELEVENLABS_API_KEY = "your-api-key"
+# Optional: override the default George voice.
+$env:ELEVENLABS_VOICE_ID = "your-voice-id"
+python gradio_app.py
+```
+
+API keys and `.env` files are ignored by Git.  Speech timing is inferred from
+visual evidence, but pitch and true vocal emotion cannot be recovered exactly
+from a silent video; the expressive provider generates a restrained plausible
+delivery instead.
 
 ---
 

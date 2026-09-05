@@ -36,8 +36,10 @@ from espnet.asr.asr_utils import parse_hypothesis
 from espnet.nets.batch_beam_search import BatchBeamSearch
 from espnet.nets.pytorch_backend.e2e_asr_transformer import E2E
 from espnet.nets.scorers.length_bonus import LengthBonus
+from language_reranker import RecognitionCandidate
 from preprocessing.landmarks_detector import LandmarksDetector
 from preprocessing.video_preprocess import VideoProcess
+from prosody import RecognitionResult, build_recognition_result
 from utils.utils import UNIGRAM1000_LIST
 
 log = logging.getLogger(__name__)
@@ -130,8 +132,18 @@ def save_mouth_crop(mouth_video: np.ndarray, output_path: str = "mouth_crop.mp4"
     log.info("Saved mouth crop to: %s (%d frames, %dx%d)", output_path, T, W, H)
 
 
-def preprocess_video(video_frames: np.ndarray, landmarks_detector, video_processor):
-    """Detect landmarks, crop mouth, return tensor (C, T, H, W)."""
+def preprocess_video(
+    video_frames: np.ndarray,
+    landmarks_detector,
+    video_processor,
+    mouth_crop_path: str = "mouth_crop.mp4",
+    return_mouth_video: bool = False,
+):
+    """Detect landmarks and return the normalized mouth tensor.
+
+    ``return_mouth_video`` preserves the stabilized RGB mouth crop for visual
+    pause analysis without changing the original inference API.
+    """
     landmarks = landmarks_detector(video_frames)
     mouth_video = video_processor(video_frames, landmarks)
     if mouth_video is None:
@@ -139,10 +151,12 @@ def preprocess_video(video_frames: np.ndarray, landmarks_detector, video_process
             "Could not detect a face in enough frames. "
             "Make sure the video contains a clearly visible face."
         )
-    save_mouth_crop(mouth_video)
+    save_mouth_crop(mouth_video, mouth_crop_path)
     # (T, H, W, C) -> (C, T, H, W) float tensor
     video_tensor = torch.from_numpy(mouth_video).permute(3, 0, 1, 2).float()
     video_tensor = build_video_transform()(video_tensor)
+    if return_mouth_video:
+        return video_tensor, mouth_video
     return video_tensor  # (T, H, W)
 
 
@@ -200,19 +214,101 @@ def build_beam_search(cfg: DictConfig, model: E2E):
 # Decoding
 # ---------------------------------------------------------------------------
 
-def decode(features: torch.Tensor, beam_search: BatchBeamSearch,
-           modality: str, cfg: DictConfig) -> str:
-    """Run beam search and return the 1-best transcription string."""
+def _candidate_from_hypothesis(hypothesis, rank: int) -> RecognitionCandidate:
+    """Keep text, tokens and component scores for safe N-best reranking."""
+    data = hypothesis.asdict()
+    text, _, token_id_text, _ = parse_hypothesis(data, UNIGRAM1000_LIST)
+    text = text.replace("<eos>", "").replace("\u2581", " ").strip()
+    token_ids = [int(value) for value in token_id_text.split()]
+    eos_id = len(UNIGRAM1000_LIST) - 1
+    token_ids = [token_id for token_id in token_ids if token_id not in (0, eos_id)]
+    return RecognitionCandidate(
+        rank=rank,
+        text=text,
+        token_ids=tuple(token_ids),
+        score=float(data.get("score", 0.0)),
+        component_scores={
+            str(name): float(score)
+            for name, score in (data.get("scores") or {}).items()
+        },
+    )
+
+
+def decode_nbest(
+    features: torch.Tensor,
+    beam_search: BatchBeamSearch,
+    modality: str,
+    cfg: DictConfig,
+    max_candidates: int = 5,
+) -> list[RecognitionCandidate]:
+    """Run beam search once and retain unique, unchanged N-best candidates."""
+    if max_candidates < 1:
+        raise ValueError("max_candidates must be at least 1")
     hyps = beam_search(
         x=features.squeeze(0),
         modality=modality,
         maxlenratio=cfg.decode.maxlenratio,
         minlenratio=cfg.decode.minlenratio,
     )
-    best = hyps[0].asdict()
-    text, _, _, _ = parse_hypothesis(best, UNIGRAM1000_LIST)
-    text = text.replace("<eos>", "").replace("\u2581", " ").strip()
+    candidates = []
+    seen = set()
+    for hypothesis in hyps:
+        candidate = _candidate_from_hypothesis(hypothesis, len(candidates) + 1)
+        normalized_text = " ".join(candidate.text.upper().split())
+        if not normalized_text or normalized_text in seen:
+            continue
+        seen.add(normalized_text)
+        candidates.append(candidate)
+        if len(candidates) >= max_candidates:
+            break
+    if not candidates:
+        raise RuntimeError("Beam search returned no non-empty hypotheses")
+    return candidates
+
+
+def _decode_hypothesis(features: torch.Tensor, beam_search: BatchBeamSearch,
+                       modality: str, cfg: DictConfig):
+    """Run beam search once and keep both display text and token IDs."""
+    best = decode_nbest(features, beam_search, modality, cfg, max_candidates=1)[0]
+    return best.text, list(best.token_ids)
+
+
+def decode(features: torch.Tensor, beam_search: BatchBeamSearch,
+           modality: str, cfg: DictConfig) -> str:
+    """Run beam search and return the 1-best transcription string."""
+    text, _ = _decode_hypothesis(features, beam_search, modality, cfg)
     return text
+
+
+def decode_with_timing(
+    features: torch.Tensor,
+    beam_search: BatchBeamSearch,
+    modality: str,
+    cfg: DictConfig,
+    *,
+    ctc_module,
+    mouth_video: np.ndarray,
+    video_duration_s: float,
+) -> RecognitionResult:
+    """Decode text and conservatively recover CTC/visual pause timing."""
+    text, token_ids = _decode_hypothesis(features, beam_search, modality, cfg)
+    if not text or not token_ids or ctc_module is None:
+        return RecognitionResult(
+            text=text,
+            token_ids=token_ids,
+            tokens=[UNIGRAM1000_LIST[token_id] for token_id in token_ids],
+            video_duration_s=video_duration_s,
+            alignment_status="unavailable: no CTC-aligned text",
+        )
+    log_probs = ctc_module.log_softmax(features).squeeze(0)
+    return build_recognition_result(
+        text=text,
+        token_ids=token_ids,
+        token_list=UNIGRAM1000_LIST,
+        log_probs=log_probs,
+        mouth_video=mouth_video,
+        video_duration_s=video_duration_s,
+    )
 
 
 @torch.no_grad()
